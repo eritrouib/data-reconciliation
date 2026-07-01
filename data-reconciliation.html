@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Data Reconciliation Tool</title>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#fff;--bg-s:#f7f7f5;--bg-t:#f0efeb;
+  --tx:#1a1a18;--tx2:#5f5e5a;--txh:#9c9b96;
+  --bd:rgba(0,0,0,.1);--bds:rgba(0,0,0,.2);
+  --abg:#E6F1FB;--atx:#0C447C;
+  --sbg:#EAF3DE;--stx:#27500A;
+  --wbg:#FAEEDA;--wtx:#633806;
+  --rbg:#FDECEA;--rtx:#7A1C1C;
+  --r:10px;--rs:6px;
+  --green:#2D7D3A;--amber:#B45309;--red:#B91C1C
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#1e1e1c;--bg-s:#2a2a28;--bg-t:#242422;
+  --tx:#e8e7e2;--tx2:#a8a7a2;--txh:#6a6a66;
+  --bd:rgba(255,255,255,.1);--bds:rgba(255,255,255,.2);
+  --abg:#0C447C;--atx:#B5D4F4;
+  --sbg:#1a3a0a;--stx:#C0DD97;
+  --wbg:#4a2a00;--wtx:#FAC775;
+  --rbg:#4a0a0a;--rtx:#FAB4B4
+}}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg-t);color:var(--tx);min-height:100vh;padding:2rem 1rem 4rem;line-height:1.6}
+.wrap{max-width:900px;margin:0 auto}
+h1{font-size:22px;font-weight:600;margin-bottom:4px}
+.sub{font-size:15px;color:var(--tx2);margin-bottom:1.5rem}
+.badge{display:inline-block;font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;background:var(--abg);color:var(--atx);margin-bottom:10px;letter-spacing:.03em}
+.safe{display:flex;align-items:center;gap:8px;background:var(--sbg);color:var(--stx);border-radius:var(--rs);padding:10px 14px;font-size:13px;font-weight:500;margin-bottom:1.5rem}
+
+/* Source panels */
+.sources{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}
+@media(max-width:600px){.sources{grid-template-columns:1fr}}
+.source-panel{background:var(--bg);border:.5px solid var(--bd);border-radius:var(--r);padding:1.25rem}
+.source-label{font-size:12px;font-weight:600;color:var(--tx2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.src-num{width:20px;height:20px;border-radius:50%;background:var(--abg);color:var(--atx);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.drop{border:1.5px dashed var(--bds);border-radius:var(--rs);background:var(--bg-s);padding:1.5rem 1rem;text-align:center;cursor:pointer;transition:all .15s}
+.drop:hover,.drop.over{border-color:#378ADD;background:var(--abg)}
+.drop input{display:none}
+.drop-icon{width:28px;height:28px;stroke:var(--txh);stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;display:block;margin:0 auto 8px}
+.drop h3{font-size:13px;font-weight:500;margin-bottom:2px}
+.drop p{font-size:12px;color:var(--tx2)}
+.browse{color:#185FA5;text-decoration:underline}
+.file-loaded{display:none;align-items:center;gap:8px;padding:8px 10px;background:var(--sbg);border-radius:var(--rs);margin-top:8px}
+.file-loaded.on{display:flex}
+.file-loaded .fn{font-size:13px;font-weight:500;color:var(--stx);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-loaded .fi{font-size:11px;color:var(--stx);opacity:.8}
+.xbtn{background:none;border:none;cursor:pointer;color:var(--txh);font-size:18px;line-height:1;padding:0 2px;flex-shrink:0}
+.xbtn:hover{color:#E24B4A}
+
+/* Column mapping */
+.mapping-card{display:none;background:var(--bg);border:.5px solid var(--bd);border-radius:var(--r);padding:1.25rem;margin-bottom:1rem}
+.mapping-card.on{display:block}
+.ctitle{font-size:12px;font-weight:600;color:var(--tx2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.map-row{display:grid;grid-template-columns:1fr auto 1fr auto;gap:8px;align-items:center;margin-bottom:8px}
+@media(max-width:600px){.map-row{grid-template-columns:1fr 1fr auto}}
+.map-row select{background:var(--bg-s);border:.5px solid var(--bd);border-radius:var(--rs);padding:7px 10px;font-size:13px;font-family:inherit;color:var(--tx);outline:none;cursor:pointer}
+.map-row select:focus{border-color:var(--bds)}
+.map-arrow{color:var(--txh);font-size:16px;text-align:center;flex-shrink:0}
+.key-badge{font-size:10px;font-weight:700;padding:2px 6px;border-radius:8px;background:var(--abg);color:var(--atx);white-space:nowrap}
+.abtn{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--tx2);background:none;border:.5px dashed var(--bds);border-radius:var(--rs);padding:7px 12px;cursor:pointer;margin-top:4px;transition:all .15s;font-family:inherit;width:fit-content}
+.abtn:hover{background:var(--bg-s);color:var(--tx)}
+.key-toggle{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:pointer;margin-top:2px}
+.key-toggle input{accent-color:#185FA5;cursor:pointer}
+
+/* Key field selector */
+.key-section{margin-bottom:14px;padding:10px 12px;background:var(--bg-s);border-radius:var(--rs);border-left:2px solid #185FA5}
+.key-section p{font-size:12px;color:var(--tx2);margin-bottom:8px}
+.key-grid{display:flex;flex-wrap:wrap;gap:6px}
+.key-chip{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;border:.5px solid var(--bd);background:var(--bg);font-size:12px;cursor:pointer;transition:all .15s}
+.key-chip:hover{border-color:var(--bds)}
+.key-chip.selected{background:var(--abg);border-color:#185FA5;color:var(--atx);font-weight:500}
+.key-chip input{display:none}
+
+/* Run button */
+.run-btn{width:100%;padding:13px;background:var(--tx);color:var(--bg);border:none;border-radius:var(--r);font-size:15px;font-weight:500;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity .15s;margin-bottom:1.5rem}
+.run-btn:hover{opacity:.85}
+.run-btn:active{transform:scale(.99)}
+.run-btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* Results */
+.results{display:none}
+.results.on{display:block}
+
+/* Summary cards */
+.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:1rem}
+@media(max-width:600px){.summary-grid{grid-template-columns:1fr 1fr}}
+.scard{background:var(--bg);border:.5px solid var(--bd);border-radius:var(--rs);padding:12px 14px;text-align:center}
+.scard .num{font-size:24px;font-weight:700;line-height:1.2}
+.scard .lbl{font-size:11px;color:var(--tx2);margin-top:2px}
+.scard.green{background:var(--sbg);border-color:transparent}
+.scard.green .num{color:var(--green)}
+.scard.amber{background:var(--wbg);border-color:transparent}
+.scard.amber .num{color:var(--amber)}
+.scard.red{background:var(--rbg);border-color:transparent}
+.scard.red .num{color:var(--red)}
+
+/* Tabs */
+.tabs{display:flex;gap:4px;margin-bottom:1rem;border-bottom:.5px solid var(--bd);padding-bottom:0}
+.tab{padding:8px 16px;font-size:13px;font-weight:500;cursor:pointer;border-radius:var(--rs) var(--rs) 0 0;color:var(--tx2);border:.5px solid transparent;border-bottom:none;transition:all .15s;font-family:inherit;background:none}
+.tab:hover{background:var(--bg-s)}
+.tab.active{background:var(--bg);color:var(--tx);border-color:var(--bd);margin-bottom:-1px}
+.tab-count{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:4px;background:var(--bg-s)}
+.tab.active .tab-count{background:var(--bg-t)}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* Table */
+.tbl-wrap{overflow-x:auto;border:.5px solid var(--bd);border-radius:var(--rs);background:var(--bg)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;padding:8px 12px;background:var(--bg-s);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--tx2);border-bottom:.5px solid var(--bd);white-space:nowrap;position:sticky;top:0}
+td{padding:7px 12px;border-bottom:.5px solid var(--bd);vertical-align:top;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--bg-s)}
+.diff-val{color:var(--red);font-weight:500}
+.match-val{color:var(--green)}
+.missing-row{background:var(--rbg)!important}
+.missing-row td{color:var(--rtx)}
+.diff-row{background:var(--wbg)!important}
+.diff-row td{color:var(--wtx)}
+.cell-diff{background:rgba(180,83,9,.15);padding:2px 4px;border-radius:3px;color:var(--amber);font-weight:600}
+
+/* Export */
+.export-bar{display:flex;gap:8px;margin-top:1rem;flex-wrap:wrap}
+.exp-btn{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:500;padding:7px 14px;background:var(--bg);color:var(--tx);border:.5px solid var(--bds);border-radius:var(--rs);cursor:pointer;font-family:inherit;transition:all .15s}
+.exp-btn:hover{background:var(--bg-s)}
+
+.ic{width:16px;height:16px;stroke:currentColor;stroke-width:1.8;fill:none;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.em{font-size:13px;color:var(--txh);font-style:italic}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.no-data{padding:2rem;text-align:center;color:var(--txh);font-size:13px}
+.col-tag{display:inline-block;font-size:10px;padding:1px 5px;border-radius:4px;background:var(--abg);color:var(--atx);margin-left:4px;font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="badge">Data Analysis</div>
+  <h1>Data reconciliation tool</h1>
+  <p class="sub">Drop two data sources in. Map the columns that should match. Get an instant discrepancy report — missing rows, value differences, count mismatches. Everything runs locally, nothing uploaded.</p>
+
+  <div class="safe">
+    <svg class="ic" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    100% local. Your data never leaves your computer.
+  </div>
+
+  <!-- Source panels -->
+  <div class="sources">
+    <div class="source-panel">
+      <div class="source-label"><span class="src-num">1</span> Source A</div>
+      <div class="drop" id="dz-a" onclick="document.getElementById('fi-a').click()">
+        <input type="file" id="fi-a" accept=".xlsx,.xlsm,.csv"/>
+        <svg class="drop-icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        <h3>Drop file here</h3>
+        <p><span class="browse">Browse</span> &middot; .xlsx .csv</p>
+      </div>
+      <div class="file-loaded" id="fl-a">
+        <svg class="ic" viewBox="0 0 24 24" style="color:var(--stx)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <div style="flex:1"><div class="fn" id="fn-a"></div><div class="fi" id="fi2-a"></div></div>
+        <button class="xbtn" onclick="clearSource('a')">&times;</button>
+      </div>
+      <!-- Sheet selector for xlsx -->
+      <div id="sheet-sel-a" style="display:none;margin-top:8px">
+        <select id="sheet-a" style="width:100%;background:var(--bg-s);border:.5px solid var(--bd);border-radius:var(--rs);padding:7px 10px;font-size:13px;font-family:inherit;color:var(--tx);outline:none" onchange="onSheetChange('a')"></select>
+      </div>
+    </div>
+
+    <div class="source-panel">
+      <div class="source-label"><span class="src-num" style="background:var(--wbg);color:var(--wtx)">2</span> Source B</div>
+      <div class="drop" id="dz-b" onclick="document.getElementById('fi-b').click()">
+        <input type="file" id="fi-b" accept=".xlsx,.xlsm,.csv"/>
+        <svg class="drop-icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        <h3>Drop file here</h3>
+        <p><span class="browse">Browse</span> &middot; .xlsx .csv</p>
+      </div>
+      <div class="file-loaded" id="fl-b">
+        <svg class="ic" viewBox="0 0 24 24" style="color:var(--stx)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <div style="flex:1"><div class="fn" id="fn-b"></div><div class="fi" id="fi2-b"></div></div>
+        <button class="xbtn" onclick="clearSource('b')">&times;</button>
+      </div>
+      <div id="sheet-sel-b" style="display:none;margin-top:8px">
+        <select id="sheet-b" style="width:100%;background:var(--bg-s);border:.5px solid var(--bd);border-radius:var(--rs);padding:7px 10px;font-size:13px;font-family:inherit;color:var(--tx);outline:none" onchange="onSheetChange('b')"></select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Column mapping -->
+  <div class="mapping-card" id="mapping-card">
+    <div class="ctitle">Match key</div>
+    <div class="key-section">
+      <p>Which column uniquely identifies each row? (e.g. ID, Reference Number, Date+Name)</p>
+      <div class="key-grid" id="key-grid"></div>
+    </div>
+    <div class="ctitle" style="margin-top:14px">Compare columns</div>
+    <p style="font-size:12px;color:var(--tx2);margin-bottom:10px">Select which columns to compare for value differences. Leave empty to compare all matching columns.</p>
+    <div id="col-mapping"></div>
+    <button class="abtn" onclick="addColMap()">
+      <svg class="ic" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add column pair
+    </button>
+  </div>
+
+  <button class="run-btn" id="run-btn" onclick="reconcile()" disabled>
+    <svg class="ic" style="width:18px;height:18px" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    Run reconciliation
+  </button>
+
+  <!-- Results -->
+  <div class="results" id="results">
+    <div class="summary-grid" id="summary-grid"></div>
+
+    <div class="tabs" id="tabs"></div>
+
+    <div id="tab-panels"></div>
+
+    <div class="export-bar">
+      <button class="exp-btn" onclick="exportCSV()">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export discrepancies as CSV
+      </button>
+      <button class="exp-btn" onclick="copyReport()">
+        <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        Copy summary report
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- state ----
+const SRC={a:{data:null,headers:[],zip:null,sheets:[]},b:{data:null,headers:[],zip:null,sheets:[]}};
+let RESULTS=null;
+
+// ---- file handling ----
+['a','b'].forEach(s=>{
+  const dz=document.getElementById('dz-'+s);
+  const fi=document.getElementById('fi-'+s);
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('over')});
+  dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('over');if(e.dataTransfer.files[0])loadFile(s,e.dataTransfer.files[0])});
+  fi.addEventListener('change',()=>{if(fi.files[0])loadFile(s,fi.files[0])});
+});
+
+async function loadFile(s,file){
+  const ext=file.name.split('.').pop().toLowerCase();
+  document.getElementById('fn-'+s).textContent=file.name;
+
+  if(ext==='csv'){
+    const text=await file.text();
+    const{headers,rows}=parseCSV(text);
+    SRC[s].data=rows;SRC[s].headers=headers;SRC[s].zip=null;SRC[s].sheets=[];
+    document.getElementById('fi2-'+s).textContent=rows.length+' rows, '+headers.length+' columns';
+    document.getElementById('fl-'+s).classList.add('on');
+    document.getElementById('dz-'+s).style.display='none';
+    document.getElementById('sheet-sel-'+s).style.display='none';
+    checkBothLoaded();
+  } else if(['xlsx','xlsm'].includes(ext)){
+    const buf=await file.arrayBuffer();
+    const zip=await JSZip.loadAsync(buf);
+    SRC[s].zip=zip;
+    // get sheet names
+    const wbXml=await zip.file('xl/workbook.xml').async('text');
+    const wbDoc=new DOMParser().parseFromString(wbXml,'text/xml');
+    const sheetEls=Array.from(wbDoc.getElementsByTagNameNS('*','sheet'));
+    const names=sheetEls.map(e=>e.getAttribute('name')).filter(Boolean);
+    SRC[s].sheets=names;
+    // populate sheet selector
+    const sel=document.getElementById('sheet-'+s);
+    sel.innerHTML=names.map((n,i)=>`<option value="${i}">${esc(n)}</option>`).join('');
+    document.getElementById('sheet-sel-'+s).style.display='block';
+    document.getElementById('fl-'+s).classList.add('on');
+    document.getElementById('dz-'+s).style.display='none';
+    // load first sheet
+    await loadExcelSheet(s,0);
+  }
+}
+
+async function loadExcelSheet(s,idx){
+  const zip=SRC[s].zip;
+  if(!zip)return;
+  // shared strings
+  const ss=[];
+  const ssf=zip.file('xl/sharedStrings.xml');
+  if(ssf){
+    const doc=new DOMParser().parseFromString(await ssf.async('text'),'text/xml');
+    for(const si of Array.from(doc.getElementsByTagNameNS('*','si')))
+      ss.push(Array.from(si.getElementsByTagNameNS('*','t')).map(t=>t.textContent||'').join(''));
+  }
+  // rels
+  const wbRels=new DOMParser().parseFromString(await zip.file('xl/_rels/workbook.xml.rels').async('text'),'text/xml');
+  const rels={};
+  for(const r of Array.from(wbRels.getElementsByTagNameNS('*','Relationship')))
+    rels[r.getAttribute('Id')]='xl/'+r.getAttribute('Target').replace(/^\.\.\//,'').replace(/^xl\//,'');
+  // sheet rids
+  const wbDoc=new DOMParser().parseFromString(await zip.file('xl/workbook.xml').async('text'),'text/xml');
+  const sheetEls=Array.from(wbDoc.getElementsByTagNameNS('*','sheet'));
+  const rid=sheetEls[idx]?.getAttribute('r:id')||sheetEls[idx]?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id')||'';
+  let path=rels[rid]||`xl/worksheets/sheet${idx+1}.xml`;
+  if(!path.startsWith('xl/'))path='xl/'+path;
+  const sf=zip.file(path);
+  if(!sf){SRC[s].data=[];SRC[s].headers=[];return}
+  const{headers,rows}=parseSheetXML(await sf.async('text'),ss);
+  SRC[s].data=rows;SRC[s].headers=headers;
+  document.getElementById('fi2-'+s).textContent=rows.length+' rows, '+headers.length+' columns';
+  checkBothLoaded();
+}
+
+async function onSheetChange(s){
+  const idx=parseInt(document.getElementById('sheet-'+s).value);
+  await loadExcelSheet(s,idx);
+  buildMapping();
+}
+
+function parseSheetXML(xml,ss){
+  const doc=new DOMParser().parseFromString(xml,'text/xml');
+  const rows=[],NS='*';
+  for(const row of Array.from(doc.getElementsByTagNameNS(NS,'row'))){
+    const rn=parseInt(row.getAttribute('r')||'0');
+    if(rn>10000)break;
+    const cells={};
+    for(const cell of Array.from(row.getElementsByTagNameNS(NS,'c'))){
+      const ref=cell.getAttribute('r')||'';
+      const col=ref.replace(/[0-9]/g,'');
+      const t=cell.getAttribute('t')||'';
+      let val='';
+      const vel=cell.getElementsByTagNameNS(NS,'v')[0];
+      const isel=cell.getElementsByTagNameNS(NS,'is')[0];
+      if(isel)val=Array.from(isel.getElementsByTagNameNS(NS,'t')).map(x=>x.textContent).join('');
+      else if(t==='s'&&vel)val=ss[parseInt(vel.textContent)]||'';
+      else if(vel)val=vel.textContent||'';
+      if(val.trim())cells[col]=val.trim();
+    }
+    if(Object.keys(cells).length)rows.push(cells);
+  }
+  if(!rows.length)return{headers:[],rows:[]};
+  const headerRow=rows[0];
+  const cols=Object.keys(headerRow).sort();
+  const headers=cols.map(c=>headerRow[c]);
+  const data=rows.slice(1).map(row=>Object.fromEntries(headers.map((h,i)=>[h,row[cols[i]]||''])));
+  return{headers,rows:data};
+}
+
+function parseCSV(text){
+  const lines=text.split(/\r?\n/).filter(l=>l.trim());
+  if(!lines.length)return{headers:[],rows:[]};
+  const parse=line=>{
+    const res=[];let cur='',inQ=false;
+    for(let i=0;i<line.length;i++){
+      const c=line[i];
+      if(c==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i++}else inQ=!inQ}
+      else if(c===','&&!inQ){res.push(cur.trim());cur=''}
+      else cur+=c;
+    }
+    res.push(cur.trim());return res;
+  };
+  const headers=parse(lines[0]);
+  const rows=lines.slice(1).map(l=>{
+    const vals=parse(l);
+    return Object.fromEntries(headers.map((h,i)=>[h,vals[i]||'']));
+  });
+  return{headers,rows};
+}
+
+function checkBothLoaded(){
+  const both=SRC.a.data&&SRC.b.data;
+  document.getElementById('run-btn').disabled=!both;
+  if(both)buildMapping();
+}
+
+// ---- mapping UI ----
+function buildMapping(){
+  const ha=SRC.a.headers,hb=SRC.b.headers;
+  if(!ha.length||!hb.length)return;
+  document.getElementById('mapping-card').classList.add('on');
+
+  // Key column chips — show Source A columns, auto-select likely key
+  const keyGrid=document.getElementById('key-grid');
+  keyGrid.innerHTML='';
+  const keyHints=['id','ref','reference','key','code','number','no','num','record'];
+  ha.forEach((h,i)=>{
+    const isLikelyKey=keyHints.some(k=>h.toLowerCase().includes(k));
+    const chip=document.createElement('label');
+    chip.className='key-chip'+(isLikelyKey?' selected':'');
+    chip.innerHTML=`<input type="checkbox" value="${esc(h)}"${isLikelyKey?' checked':''}><span>${esc(h)}</span>`;
+    chip.querySelector('input').addEventListener('change',()=>chip.classList.toggle('selected',chip.querySelector('input').checked));
+    keyGrid.appendChild(chip);
+  });
+
+  // Column mapping — auto-match columns with same name
+  const colMap=document.getElementById('col-mapping');
+  colMap.innerHTML='';
+  const matched=ha.filter(h=>hb.includes(h)).filter(h=>{
+    const keyHints2=['id','ref','reference','key','code','number','no','num','record'];
+    return!keyHints2.some(k=>h.toLowerCase().includes(k));
+  });
+  // Add top 6 auto-matched pairs
+  matched.slice(0,6).forEach(h=>addColMap(h,h));
+  if(!matched.length)addColMap();
+}
+
+function addColMap(valA='',valB=''){
+  const ha=SRC.a.headers,hb=SRC.b.headers;
+  const row=document.createElement('div');row.className='map-row';
+  const mkSel=(headers,val,placeholder)=>{
+    const s=document.createElement('select');
+    s.innerHTML=`<option value="">-- ${placeholder} --</option>`+headers.map(h=>`<option value="${esc(h)}"${h===val?' selected':''}>${esc(h)}</option>`).join('');
+    Object.assign(s.style,{background:'var(--bg-s)',border:'.5px solid var(--bd)',borderRadius:'var(--rs)',padding:'7px 10px',fontSize:'13px',fontFamily:'inherit',color:'var(--tx)',outline:'none',width:'100%'});
+    return s;
+  };
+  const sA=mkSel(ha,valA,'Source A column');
+  const arr=document.createElement('div');arr.className='map-arrow';arr.textContent='→';
+  const sB=mkSel(hb,valB,'Source B column');
+  const del=document.createElement('button');del.className='xbtn';del.innerHTML='&times;';del.style.fontSize='18px';
+  del.onclick=()=>row.remove();
+  row.appendChild(sA);row.appendChild(arr);row.appendChild(sB);row.appendChild(del);
+  document.getElementById('col-mapping').appendChild(row);
+}
+
+function getKeys(){
+  return Array.from(document.querySelectorAll('#key-grid input:checked')).map(i=>i.value);
+}
+
+function getColMaps(){
+  const maps=[];
+  document.querySelectorAll('#col-mapping .map-row').forEach(row=>{
+    const sels=row.querySelectorAll('select');
+    if(sels[0].value&&sels[1].value)maps.push({a:sels[0].value,b:sels[1].value});
+  });
+  return maps;
+}
+
+// ---- reconciliation engine ----
+function reconcile(){
+  const keys=getKeys();
+  if(!keys.length){alert('Please select at least one key column to match rows on.');return}
+  const colMaps=getColMaps();
+  const rowsA=SRC.a.data,rowsB=SRC.b.data;
+
+  // Build lookup maps
+  const getKey=(row,keyFields)=>keyFields.map(k=>String(row[k]||'').trim().toLowerCase()).join('||');
+  const mapA=new Map(),mapB=new Map();
+
+  // Map Source A keys — use Source A header names for keys
+  const keysInA=keys; // these are Source A column names
+  // For Source B, find corresponding column (same name if exists, else first key)
+  const keysInB=keys.map(k=>{
+    if(SRC.b.headers.includes(k))return k;
+    // try to find matching key in B headers
+    const found=SRC.b.headers.find(h=>h.toLowerCase()===k.toLowerCase());
+    return found||k;
+  });
+
+  rowsA.forEach((row,i)=>{const k=getKey(row,keysInA);if(!mapA.has(k))mapA.set(k,[]);mapA.get(k).push({row,idx:i})});
+  rowsB.forEach((row,i)=>{const k=getKey(row,keysInB);if(!mapB.has(k))mapB.set(k,[]);mapB.get(k).push({row,idx:i})});
+
+  const missingInB=[],missingInA=[],differences=[],matched=[];
+
+  // Rows in A not in B
+  mapA.forEach((entries,k)=>{
+    if(!mapB.has(k)){
+      entries.forEach(e=>missingInB.push({key:k,row:e.row}));
+    }
+  });
+
+  // Rows in B not in A
+  mapB.forEach((entries,k)=>{
+    if(!mapA.has(k)){
+      entries.forEach(e=>missingInA.push({key:k,row:e.row}));
+    }
+  });
+
+  // Rows in both — compare values
+  mapA.forEach((entriesA,k)=>{
+    if(!mapB.has(k))return;
+    const entriesB=mapB.get(k);
+    const rowA=entriesA[0].row,rowB=entriesB[0].row;
+    const diffs={};
+    const compareCols=colMaps.length?colMaps:SRC.a.headers.filter(h=>SRC.b.headers.includes(h)&&!keysInA.includes(h)).map(h=>({a:h,b:h}));
+    compareCols.forEach(({a:ca,b:cb})=>{
+      const va=String(rowA[ca]||'').trim();
+      const vb=String(rowB[cb]||'').trim();
+      if(va.toLowerCase()!==vb.toLowerCase())diffs[ca]={a:va,b:vb,colB:cb};
+    });
+    if(Object.keys(diffs).length)differences.push({key:k,rowA,rowB,diffs});
+    else matched.push({key:k,rowA,rowB});
+  });
+
+  RESULTS={missingInB,missingInA,differences,matched,keys,keysInA,keysInB,colMaps,totalA:rowsA.length,totalB:rowsB.length};
+  renderResults();
+}
+
+function renderResults(){
+  const{missingInB,missingInA,differences,matched,totalA,totalB}=RESULTS;
+  const totalIssues=missingInB.length+missingInA.length+differences.length;
+
+  // Summary cards
+  const sg=document.getElementById('summary-grid');
+  sg.innerHTML='';
+  const cards=[
+    {num:totalA,lbl:'Rows in Source A',cls:''},
+    {num:totalB,lbl:'Rows in Source B',cls:''},
+    {num:matched.length,lbl:'Matched rows',cls:'green'},
+    {num:totalIssues,lbl:'Discrepancies found',cls:totalIssues?'red':'green'},
+  ];
+  cards.forEach(c=>{
+    const d=document.createElement('div');d.className='scard '+c.cls;
+    d.innerHTML=`<div class="num">${c.num.toLocaleString()}</div><div class="lbl">${c.lbl}</div>`;
+    sg.appendChild(d);
+  });
+
+  // Tabs
+  const tabs=document.getElementById('tabs');
+  const panels=document.getElementById('tab-panels');
+  tabs.innerHTML='';panels.innerHTML='';
+
+  const tabDefs=[
+    {id:'diffs',label:'Value differences',count:differences.length,cls:'amber'},
+    {id:'miss-b',label:'Missing in Source B',count:missingInB.length,cls:'red'},
+    {id:'miss-a',label:'Missing in Source A',count:missingInA.length,cls:'red'},
+    {id:'matched',label:'Matched',count:matched.length,cls:'green'},
+  ];
+
+  tabDefs.forEach((t,i)=>{
+    const tab=document.createElement('button');tab.className='tab'+(i===0?' active':'');
+    tab.innerHTML=`${t.label}<span class="tab-count" style="${t.count&&t.cls?`background:var(--${t.cls==='amber'?'w':'r'}bg);color:var(--${t.cls==='amber'?'w':'r'}tx)`:''}"> ${t.count}</span>`;
+    tab.onclick=()=>{
+      document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-'+t.id).classList.add('active');
+    };
+    tabs.appendChild(tab);
+
+    const panel=document.createElement('div');panel.className='tab-panel'+(i===0?' active':'');panel.id='panel-'+t.id;
+    panel.appendChild(renderTable(t.id));
+    panels.appendChild(panel);
+  });
+
+  document.getElementById('results').classList.add('on');
+  document.getElementById('results').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function renderTable(type){
+  const{missingInB,missingInA,differences,matched,keysInA,keysInB,colMaps}=RESULTS;
+  const wrap=document.createElement('div');wrap.className='tbl-wrap';
+
+  if(type==='diffs'){
+    if(!differences.length){wrap.innerHTML='<div class="no-data">No value differences found</div>';return wrap}
+    const allDiffCols=[...new Set(differences.flatMap(d=>Object.keys(d.diffs)))];
+    const t=document.createElement('table');
+    t.innerHTML='<thead><tr>'+keysInA.map(k=>`<th>${esc(k)}</th>`).join('')+allDiffCols.flatMap(c=>[`<th>A: ${esc(c)}</th>`,`<th>B: ${esc(c)}</th>`]).join('')+'</tr></thead>';
+    const tb=document.createElement('tbody');
+    differences.forEach(({key,rowA,rowB,diffs})=>{
+      const tr=document.createElement('tr');tr.className='diff-row';
+      let html=keysInA.map(k=>`<td>${esc(String(rowA[k]||''))}</td>`).join('');
+      allDiffCols.forEach(c=>{
+        if(diffs[c]){
+          html+=`<td class="cell-diff" title="Source A value">${esc(diffs[c].a)||'(blank)'}</td>`;
+          html+=`<td class="cell-diff" title="Source B value">${esc(diffs[c].b)||'(blank)'}</td>`;
+        }else{
+          html+=`<td>${esc(String(rowA[c]||''))}</td><td>${esc(String(rowB[diffs[c]?.colB||c]||''))}</td>`;
+        }
+      });
+      tr.innerHTML=html;tb.appendChild(tr);
+    });
+    t.appendChild(tb);wrap.appendChild(t);
+
+  } else if(type==='miss-b'){
+    if(!missingInB.length){wrap.innerHTML='<div class="no-data">No rows missing from Source B</div>';return wrap}
+    const cols=Object.keys(missingInB[0].row);
+    const t=document.createElement('table');
+    t.innerHTML='<thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead>';
+    const tb=document.createElement('tbody');
+    missingInB.slice(0,500).forEach(({row})=>{
+      const tr=document.createElement('tr');tr.className='missing-row';
+      tr.innerHTML=cols.map(c=>`<td>${esc(String(row[c]||''))}</td>`).join('');
+      tb.appendChild(tr);
+    });
+    if(missingInB.length>500){const tr=document.createElement('tr');tr.innerHTML=`<td colspan="${cols.length}" style="text-align:center;color:var(--txh);font-style:italic">Showing 500 of ${missingInB.length} rows</td>`;tb.appendChild(tr)}
+    t.appendChild(tb);wrap.appendChild(t);
+
+  } else if(type==='miss-a'){
+    if(!missingInA.length){wrap.innerHTML='<div class="no-data">No rows missing from Source A</div>';return wrap}
+    const cols=Object.keys(missingInA[0].row);
+    const t=document.createElement('table');
+    t.innerHTML='<thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead>';
+    const tb=document.createElement('tbody');
+    missingInA.slice(0,500).forEach(({row})=>{
+      const tr=document.createElement('tr');tr.className='missing-row';
+      tr.innerHTML=cols.map(c=>`<td>${esc(String(row[c]||''))}</td>`).join('');
+      tb.appendChild(tr);
+    });
+    if(missingInA.length>500){const tr=document.createElement('tr');tr.innerHTML=`<td colspan="${cols.length}" style="text-align:center;color:var(--txh);font-style:italic">Showing 500 of ${missingInA.length} rows</td>`;tb.appendChild(tr)}
+    t.appendChild(tb);wrap.appendChild(t);
+
+  } else if(type==='matched'){
+    if(!matched.length){wrap.innerHTML='<div class="no-data">No matched rows</div>';return wrap}
+    const cols=Object.keys(matched[0].rowA);
+    const t=document.createElement('table');
+    t.innerHTML='<thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead>';
+    const tb=document.createElement('tbody');
+    matched.slice(0,200).forEach(({rowA})=>{
+      const tr=document.createElement('tr');
+      tr.innerHTML=cols.map(c=>`<td>${esc(String(rowA[c]||''))}</td>`).join('');
+      tb.appendChild(tr);
+    });
+    if(matched.length>200){const tr=document.createElement('tr');tr.innerHTML=`<td colspan="${cols.length}" style="text-align:center;color:var(--txh);font-style:italic">Showing 200 of ${matched.length} rows</td>`;tb.appendChild(tr)}
+    t.appendChild(tb);wrap.appendChild(t);
+  }
+
+  return wrap;
+}
+
+// ---- export ----
+function exportCSV(){
+  if(!RESULTS)return;
+  const{missingInB,missingInA,differences,keysInA}=RESULTS;
+  const rows=[['Issue type',...keysInA,'Column','Source A value','Source B value']];
+
+  differences.forEach(({rowA,diffs})=>{
+    Object.entries(diffs).forEach(([col,{a,b}])=>{
+      rows.push(['Value difference',...keysInA.map(k=>rowA[k]||''),col,a,b]);
+    });
+  });
+  missingInB.forEach(({row})=>{
+    rows.push(['Missing in Source B',...keysInA.map(k=>row[k]||''),'','','']);
+  });
+  missingInA.forEach(({row})=>{
+    rows.push(['Missing in Source A',...keysInA.map(k=>row[k]||''),'','','']);
+  });
+
+  const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
+  const a=document.createElement('a');
+  a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+  a.download='reconciliation-report-'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click();
+}
+
+function copyReport(){
+  if(!RESULTS)return;
+  const{missingInB,missingInA,differences,matched,totalA,totalB}=RESULTS;
+  const date=new Date().toLocaleDateString();
+  let txt=`DATA RECONCILIATION REPORT\n${date}\n\n`;
+  txt+=`Source A: ${document.getElementById('fn-a').textContent} (${totalA} rows)\n`;
+  txt+=`Source B: ${document.getElementById('fn-b').textContent} (${totalB} rows)\n\n`;
+  txt+=`SUMMARY\n`;
+  txt+=`  Matched rows: ${matched.length}\n`;
+  txt+=`  Value differences: ${differences.length}\n`;
+  txt+=`  Missing in Source B: ${missingInB.length}\n`;
+  txt+=`  Missing in Source A: ${missingInA.length}\n`;
+  txt+=`  Total discrepancies: ${differences.length+missingInB.length+missingInA.length}\n`;
+  navigator.clipboard.writeText(txt).then(()=>{
+    const btn=event.target.closest('.exp-btn');
+    const orig=btn.innerHTML;
+    btn.innerHTML='<svg class="ic" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Copied!';
+    setTimeout(()=>btn.innerHTML=orig,2000);
+  });
+}
+
+function clearSource(s){
+  SRC[s]={data:null,headers:[],zip:null,sheets:[]};
+  document.getElementById('fl-'+s).classList.remove('on');
+  document.getElementById('dz-'+s).style.display='';
+  document.getElementById('sheet-sel-'+s).style.display='none';
+  document.getElementById('fi-'+s).value='';
+  document.getElementById('run-btn').disabled=true;
+  document.getElementById('mapping-card').classList.remove('on');
+  document.getElementById('results').classList.remove('on');
+}
+
+function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+</script>
+</body>
+</html>
