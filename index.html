@@ -89,8 +89,7 @@ h1{font-size:22px;font-weight:600;margin-bottom:4px}
 .results.on{display:block}
 
 /* Summary cards */
-.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:1rem}
-@media(max-width:600px){.summary-grid{grid-template-columns:1fr 1fr}}
+.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:1rem}
 .scard{background:var(--bg);border:.5px solid var(--bd);border-radius:var(--rs);padding:12px 14px;text-align:center}
 .scard .num{font-size:24px;font-weight:700;line-height:1.2}
 .scard .lbl{font-size:11px;color:var(--tx2);margin-top:2px}
@@ -233,7 +232,7 @@ tr:hover td{background:var(--bg-s)}
 
 <script>
 // ---- state ----
-const SRC={a:{data:null,headers:[],zip:null,sheets:[]},b:{data:null,headers:[],zip:null,sheets:[]}};
+const SRC={a:{data:null,headers:[],zip:null,sheets:[],formulaData:[]},b:{data:null,headers:[],zip:null,sheets:[],formulaData:[]}};
 let RESULTS=null;
 
 // ---- file handling ----
@@ -253,7 +252,7 @@ async function loadFile(s,file){
   if(ext==='csv'){
     const text=await file.text();
     const{headers,rows}=parseCSV(text);
-    SRC[s].data=rows;SRC[s].headers=headers;SRC[s].zip=null;SRC[s].sheets=[];
+    SRC[s].data=rows;SRC[s].headers=headers;SRC[s].zip=null;SRC[s].sheets=[];SRC[s].formulaData=[];
     document.getElementById('fi2-'+s).textContent=rows.length+' rows, '+headers.length+' columns';
     document.getElementById('fl-'+s).classList.add('on');
     document.getElementById('dz-'+s).style.display='none';
@@ -304,8 +303,8 @@ async function loadExcelSheet(s,idx){
   if(!path.startsWith('xl/'))path='xl/'+path;
   const sf=zip.file(path);
   if(!sf){SRC[s].data=[];SRC[s].headers=[];return}
-  const{headers,rows}=parseSheetXML(await sf.async('text'),ss);
-  SRC[s].data=rows;SRC[s].headers=headers;
+  const{headers,rows,formulaData}=parseSheetXML(await sf.async('text'),ss);
+  SRC[s].data=rows;SRC[s].headers=headers;SRC[s].formulaData=formulaData||[];
   document.getElementById('fi2-'+s).textContent=rows.length+' rows, '+headers.length+' columns';
   checkBothLoaded();
 }
@@ -318,11 +317,13 @@ async function onSheetChange(s){
 
 function parseSheetXML(xml,ss){
   const doc=new DOMParser().parseFromString(xml,'text/xml');
-  const rows=[],NS='*';
+  const rows=[],formulaRows=[],NS='*';
+  // Handle shared formulas — store by si index
+  const sharedFormulas={};
   for(const row of Array.from(doc.getElementsByTagNameNS(NS,'row'))){
     const rn=parseInt(row.getAttribute('r')||'0');
     if(rn>10000)break;
-    const cells={};
+    const cells={},formulas={};
     for(const cell of Array.from(row.getElementsByTagNameNS(NS,'c'))){
       const ref=cell.getAttribute('r')||'';
       const col=ref.replace(/[0-9]/g,'');
@@ -330,19 +331,36 @@ function parseSheetXML(xml,ss){
       let val='';
       const vel=cell.getElementsByTagNameNS(NS,'v')[0];
       const isel=cell.getElementsByTagNameNS(NS,'is')[0];
+      const fel=cell.getElementsByTagNameNS(NS,'f')[0];
       if(isel)val=Array.from(isel.getElementsByTagNameNS(NS,'t')).map(x=>x.textContent).join('');
       else if(t==='s'&&vel)val=ss[parseInt(vel.textContent)]||'';
       else if(vel)val=vel.textContent||'';
       if(val.trim())cells[col]=val.trim();
+      // Extract formula
+      if(fel){
+        const ftype=fel.getAttribute('t')||'';
+        const fsi=fel.getAttribute('si');
+        let ftext=fel.textContent||'';
+        if(ftype==='shared'&&ftext){
+          sharedFormulas[fsi]=ftext;
+        } else if(ftype==='shared'&&fsi&&sharedFormulas[fsi]){
+          ftext=sharedFormulas[fsi]+'*'; // mark as shared variant
+        }
+        if(ftext)formulas[col]='='+ftext.replace(/^=/,'');
+      }
     }
-    if(Object.keys(cells).length)rows.push(cells);
+    if(Object.keys(cells).length){rows.push(cells);formulaRows.push(formulas);}
   }
-  if(!rows.length)return{headers:[],rows:[]};
+  if(!rows.length)return{headers:[],rows:[],formulas:{}};
   const headerRow=rows[0];
   const cols=Object.keys(headerRow).sort();
   const headers=cols.map(c=>headerRow[c]);
   const data=rows.slice(1).map(row=>Object.fromEntries(headers.map((h,i)=>[h,row[cols[i]]||''])));
-  return{headers,rows:data};
+  // Build formula map: {rowIndex: {colHeader: formulaString}}
+  const formulaData=formulaRows.slice(1).map((frow,ri)=>
+    Object.fromEntries(headers.map((h,i)=>[h,frow[cols[i]]||null]))
+  );
+  return{headers,rows:data,formulaData};
 }
 
 function parseCSV(text){
@@ -491,6 +509,41 @@ function reconcile(){
   });
 
   RESULTS={missingInB,missingInA,differences,matched,keys,keysInA,keysInB,colMaps,totalA:rowsA.length,totalB:rowsB.length};
+
+  // ---- Formula comparison (Excel only) ----
+  const formulaDiffs=[];
+  const hasFa=SRC.a.formulaData&&SRC.a.formulaData.length>0;
+  const hasFb=SRC.b.formulaData&&SRC.b.formulaData.length>0;
+  if(hasFa||hasFb){
+    // Build key to row-index maps
+    const idxMapA=new Map(),idxMapB=new Map();
+    rowsA.forEach((row,i)=>{const k=getKey(row,keysInA);idxMapA.set(k,i)});
+    rowsB.forEach((row,i)=>{const k=getKey(row,keysInB);idxMapB.set(k,i)});
+    const compareCols=colMaps.length?colMaps:SRC.a.headers.filter(h=>SRC.b.headers.includes(h)&&!keysInA.includes(h)).map(h=>({a:h,b:h}));
+
+    idxMapA.forEach((iA,k)=>{
+      if(!idxMapB.has(k))return;
+      const iB=idxMapB.get(k);
+      const rowA=rowsA[iA],rowB=rowsB[iB];
+      const fRowA=(hasFa&&SRC.a.formulaData[iA])||{};
+      const fRowB=(hasFb&&SRC.b.formulaData[iB])||{};
+      const fdiffs={};
+      compareCols.forEach(({a:ca,b:cb})=>{
+        const fa=fRowA[ca]||null;
+        const fb=fRowB[cb]||null;
+        // Flag if: formulas differ, or one has formula and other doesn't
+        if(fa!==fb){
+          const issue=(!fa&&fb)?'hardcoded in A, formula in B':
+                      (fa&&!fb)?'formula in A, hardcoded in B':
+                      'different formulas';
+          fdiffs[ca]={fa:fa||'(no formula)',fb:fb||'(no formula)',issue,valA:rowA[ca]||'',valB:rowB[cb]||''};
+        }
+      });
+      if(Object.keys(fdiffs).length)formulaDiffs.push({key:k,rowA,rowB,fdiffs});
+    });
+  }
+  RESULTS.formulaDiffs=formulaDiffs;
+  RESULTS.hasFormulaCheck=hasFa||hasFb;
   renderResults();
 }
 
@@ -505,8 +558,11 @@ function renderResults(){
     {num:totalA,lbl:'Rows in Source A',cls:''},
     {num:totalB,lbl:'Rows in Source B',cls:''},
     {num:matched.length,lbl:'Matched rows',cls:'green'},
-    {num:totalIssues,lbl:'Discrepancies found',cls:totalIssues?'red':'green'},
+    {num:totalIssues,lbl:'Value discrepancies',cls:totalIssues?'red':'green'},
   ];
+  if(RESULTS.hasFormulaCheck){
+    cards.push({num:RESULTS.formulaDiffs.length,lbl:'Formula discrepancies',cls:RESULTS.formulaDiffs.length?'amber':'green'});
+  }
   cards.forEach(c=>{
     const d=document.createElement('div');d.className='scard '+c.cls;
     d.innerHTML=`<div class="num">${c.num.toLocaleString()}</div><div class="lbl">${c.lbl}</div>`;
@@ -519,11 +575,12 @@ function renderResults(){
   tabs.innerHTML='';panels.innerHTML='';
 
   const tabDefs=[
-    {id:'diffs',label:'Value differences',count:differences.length,cls:'amber'},
+    {id:'diffs',label:'Value differences',count:differences.length,cls:'red'},
+    {id:'formulas',label:'Formula differences',count:RESULTS.formulaDiffs.length,cls:'amber',hidden:!RESULTS.hasFormulaCheck},
     {id:'miss-b',label:'Missing in Source B',count:missingInB.length,cls:'red'},
     {id:'miss-a',label:'Missing in Source A',count:missingInA.length,cls:'red'},
     {id:'matched',label:'Matched',count:matched.length,cls:'green'},
-  ];
+  ].filter(t=>!t.hidden);
 
   tabDefs.forEach((t,i)=>{
     const tab=document.createElement('button');tab.className='tab'+(i===0?' active':'');
@@ -549,7 +606,36 @@ function renderTable(type){
   const{missingInB,missingInA,differences,matched,keysInA,keysInB,colMaps}=RESULTS;
   const wrap=document.createElement('div');wrap.className='tbl-wrap';
 
-  if(type==='diffs'){
+  if(type==='formulas'){
+    const{formulaDiffs,keysInA}=RESULTS;
+    if(!formulaDiffs||!formulaDiffs.length){
+      wrap.innerHTML='<div class="no-data">No formula differences found. Both sources use the same formulas (or neither is an Excel file).</div>';
+      return wrap;
+    }
+    const allCols=[...new Set(formulaDiffs.flatMap(d=>Object.keys(d.fdiffs)))];
+    const t=document.createElement('table');
+    t.innerHTML='<thead><tr>'+
+      keysInA.map(k=>`<th>${esc(k)}</th>`).join('')+
+      '<th>Column</th><th>Issue</th><th>Source A formula</th><th>Source B formula</th><th>A value</th><th>B value</th>'+
+      '</tr></thead>';
+    const tb=document.createElement('tbody');
+    formulaDiffs.forEach(({rowA,fdiffs})=>{
+      Object.entries(fdiffs).forEach(([col,{fa,fb,issue,valA,valB}])=>{
+        const tr=document.createElement('tr');tr.className='diff-row';
+        tr.innerHTML=
+          keysInA.map(k=>`<td>${esc(String(rowA[k]||''))}</td>`).join('')+
+          `<td><strong>${esc(col)}</strong></td>`+
+          `<td><span style="font-size:11px;font-weight:600;padding:2px 6px;border-radius:4px;background:var(--wbg);color:var(--wtx)">${esc(issue)}</span></td>`+
+          `<td style="font-family:monospace;font-size:11px;color:var(--atx)">${esc(fa)}</td>`+
+          `<td style="font-family:monospace;font-size:11px;color:var(--atx)">${esc(fb)}</td>`+
+          `<td>${esc(valA)}</td>`+
+          `<td>${esc(valB)}</td>`;
+        tb.appendChild(tr);
+      });
+    });
+    t.appendChild(tb);wrap.appendChild(t);
+
+  } else if(type==='diffs'){
     if(!differences.length){wrap.innerHTML='<div class="no-data">No value differences found</div>';return wrap}
     const allDiffCols=[...new Set(differences.flatMap(d=>Object.keys(d.diffs)))];
     const t=document.createElement('table');
@@ -627,6 +713,13 @@ function exportCSV(){
       rows.push(['Value difference',...keysInA.map(k=>rowA[k]||''),col,a,b]);
     });
   });
+  if(RESULTS.formulaDiffs&&RESULTS.formulaDiffs.length){
+    RESULTS.formulaDiffs.forEach(({rowA,fdiffs})=>{
+      Object.entries(fdiffs).forEach(([col,{fa,fb,issue,valA,valB}])=>{
+        rows.push([`Formula: ${issue}`,...keysInA.map(k=>rowA[k]||''),col,fa,fb]);
+      });
+    });
+  }
   missingInB.forEach(({row})=>{
     rows.push(['Missing in Source B',...keysInA.map(k=>row[k]||''),'','','']);
   });
@@ -675,5 +768,6 @@ function clearSource(s){
 
 function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 </script>
+<footer style="margin-top:3rem;text-align:center;font-size:12px;color:var(--txh)">Designed by ET and Claude &middot; 2026</footer>
 </body>
 </html>
