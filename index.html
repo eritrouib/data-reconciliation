@@ -492,23 +492,81 @@ function reconcile(){
     }
   });
 
+  // ---- Smart normalisation helpers ----
+  // Try to parse a value as a date and return ISO string, or null if not a date
+  function tryParseDate(v){
+    if(!v||v.length<4)return null;
+    // Excel serial date number (e.g. 45000)
+    if(/^\d{4,5}$/.test(v.trim())){
+      const n=parseInt(v);
+      if(n>25569&&n<60000){ // rough range for 1970-2064
+        const d=new Date((n-25569)*86400000);
+        if(!isNaN(d))return d.toISOString().slice(0,10);
+      }
+      return null;
+    }
+    // Common date string formats
+    const patterns=[
+      /^(\d{4})-(\d{2})-(\d{2})$/,           // 2024-01-15
+      /^(\d{2})\/(\d{2})\/(\d{4})$/,          // 01/15/2024 or 15/01/2024
+      /^(\d{2})-(\d{2})-(\d{4})$/,            // 15-01-2024
+      /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/,   // 1/5/24
+      /^(\d{4})\/(\d{2})\/(\d{2})$/,          // 2024/01/15
+    ];
+    for(const p of patterns){
+      if(p.test(v.trim())){
+        const d=new Date(v.trim());
+        if(!isNaN(d))return d.toISOString().slice(0,10);
+      }
+    }
+    return null;
+  }
+
+  function normalise(v){
+    // Trim all whitespace including non-breaking spaces
+    return String(v||'').replace(/[\u00A0\u202F\u2009\u200B]/g,' ').trim().toLowerCase();
+  }
+
+  function compareValues(va,vb){
+    const na=normalise(va),nb=normalise(vb);
+    if(na===nb)return{match:true};
+    // Try date normalisation
+    const da=tryParseDate(na),db=tryParseDate(nb);
+    if(da&&db){
+      if(da===db)return{match:true,note:'date format difference'};
+      return{match:false,note:'date value difference'};
+    }
+    // Check if trailing/leading space was the only difference
+    const rawA=String(va||'').toLowerCase(),rawB=String(vb||'').toLowerCase();
+    if(rawA===rawB)return{match:true,note:'whitespace difference'};
+    if(rawA.trim()===rawB.trim())return{match:true,note:'whitespace difference'};
+    return{match:false};
+  }
+
   // Rows in both — compare values
+  const qualityWarnings=[];
   mapA.forEach((entriesA,k)=>{
     if(!mapB.has(k))return;
     const entriesB=mapB.get(k);
     const rowA=entriesA[0].row,rowB=entriesB[0].row;
-    const diffs={};
+    const diffs={},warns={};
     const compareCols=colMaps.length?colMaps:SRC.a.headers.filter(h=>SRC.b.headers.includes(h)&&!keysInA.includes(h)).map(h=>({a:h,b:h}));
     compareCols.forEach(({a:ca,b:cb})=>{
-      const va=String(rowA[ca]||'').trim();
-      const vb=String(rowB[cb]||'').trim();
-      if(va.toLowerCase()!==vb.toLowerCase())diffs[ca]={a:va,b:vb,colB:cb};
+      const va=rowA[ca]||'',vb=rowB[cb]||'';
+      const result=compareValues(va,vb);
+      if(!result.match){
+        diffs[ca]={a:String(va).trim(),b:String(vb).trim(),colB:cb,note:result.note||''};
+      } else if(result.note){
+        // Values match after normalisation — flag as data quality warning
+        warns[ca]={a:String(va),b:String(vb),colB:cb,note:result.note};
+      }
     });
     if(Object.keys(diffs).length)differences.push({key:k,rowA,rowB,diffs});
     else matched.push({key:k,rowA,rowB});
+    if(Object.keys(warns).length)qualityWarnings.push({key:k,rowA,rowB,warns});
   });
 
-  RESULTS={missingInB,missingInA,differences,matched,keys,keysInA,keysInB,colMaps,totalA:rowsA.length,totalB:rowsB.length};
+  RESULTS={missingInB,missingInA,differences,matched,keys,keysInA,keysInB,colMaps,totalA:rowsA.length,totalB:rowsB.length,qualityWarnings};
 
   // ---- Formula comparison (Excel only) ----
   const formulaDiffs=[];
@@ -563,6 +621,9 @@ function renderResults(){
   if(RESULTS.hasFormulaCheck){
     cards.push({num:RESULTS.formulaDiffs.length,lbl:'Formula discrepancies',cls:RESULTS.formulaDiffs.length?'amber':'green'});
   }
+  if(RESULTS.qualityWarnings&&RESULTS.qualityWarnings.length){
+    cards.push({num:RESULTS.qualityWarnings.length,lbl:'Data quality warnings',cls:'amber'});
+  }
   cards.forEach(c=>{
     const d=document.createElement('div');d.className='scard '+c.cls;
     d.innerHTML=`<div class="num">${c.num.toLocaleString()}</div><div class="lbl">${c.lbl}</div>`;
@@ -577,6 +638,7 @@ function renderResults(){
   const tabDefs=[
     {id:'diffs',label:'Value differences',count:differences.length,cls:'red'},
     {id:'formulas',label:'Formula differences',count:RESULTS.formulaDiffs.length,cls:'amber',hidden:!RESULTS.hasFormulaCheck},
+    {id:'warnings',label:'Data quality warnings',count:(RESULTS.qualityWarnings||[]).length,cls:'amber',hidden:!(RESULTS.qualityWarnings&&RESULTS.qualityWarnings.length)},
     {id:'miss-b',label:'Missing in Source B',count:missingInB.length,cls:'red'},
     {id:'miss-a',label:'Missing in Source A',count:missingInA.length,cls:'red'},
     {id:'matched',label:'Matched',count:matched.length,cls:'green'},
@@ -606,7 +668,35 @@ function renderTable(type){
   const{missingInB,missingInA,differences,matched,keysInA,keysInB,colMaps}=RESULTS;
   const wrap=document.createElement('div');wrap.className='tbl-wrap';
 
-  if(type==='formulas'){
+  if(type==='warnings'){
+    const{qualityWarnings,keysInA}=RESULTS;
+    if(!qualityWarnings||!qualityWarnings.length){wrap.innerHTML='<div class="no-data">No data quality warnings</div>';return wrap}
+    const t=document.createElement('table');
+    t.innerHTML='<thead><tr>'+
+      keysInA.map(k=>`<th>${esc(k)}</th>`).join('')+
+      '<th>Column</th><th>Warning type</th><th>Source A raw value</th><th>Source B raw value</th>'+
+      '</tr></thead>';
+    const tb=document.createElement('tbody');
+    qualityWarnings.forEach(({rowA,warns})=>{
+      Object.entries(warns).forEach(([col,{a,b,note}])=>{
+        const tr=document.createElement('tr');tr.className='diff-row';
+        const noteLabel=note==='whitespace difference'
+          ?'<span style="font-size:11px;font-weight:600;padding:2px 6px;border-radius:4px;background:var(--wbg);color:var(--wtx)">Trailing/leading space</span>'
+          :note==='date format difference'
+          ?'<span style="font-size:11px;font-weight:600;padding:2px 6px;border-radius:4px;background:var(--wbg);color:var(--wtx)">Date format mismatch</span>'
+          :`<span style="font-size:11px;font-weight:600;padding:2px 6px;border-radius:4px;background:var(--wbg);color:var(--wtx)">${esc(note)}</span>`;
+        tr.innerHTML=
+          keysInA.map(k=>`<td>${esc(String(rowA[k]||''))}</td>`).join('')+
+          `<td><strong>${esc(col)}</strong></td>`+
+          `<td>${noteLabel}</td>`+
+          `<td style="font-family:monospace;font-size:12px">"${esc(a)}"</td>`+
+          `<td style="font-family:monospace;font-size:12px">"${esc(b)}"</td>`;
+        tb.appendChild(tr);
+      });
+    });
+    t.appendChild(tb);wrap.appendChild(t);
+
+  } else if(type==='formulas'){
     const{formulaDiffs,keysInA}=RESULTS;
     if(!formulaDiffs||!formulaDiffs.length){
       wrap.innerHTML='<div class="no-data">No formula differences found. Both sources use the same formulas (or neither is an Excel file).</div>';
@@ -713,9 +803,16 @@ function exportCSV(){
       rows.push(['Value difference',...keysInA.map(k=>rowA[k]||''),col,a,b]);
     });
   });
+  if(RESULTS.qualityWarnings&&RESULTS.qualityWarnings.length){
+    RESULTS.qualityWarnings.forEach(({rowA,warns})=>{
+      Object.entries(warns).forEach(([col,{a,b,note}])=>{
+        rows.push([`Warning: ${note}`,...keysInA.map(k=>rowA[k]||''),col,a,b]);
+      });
+    });
+  }
   if(RESULTS.formulaDiffs&&RESULTS.formulaDiffs.length){
     RESULTS.formulaDiffs.forEach(({rowA,fdiffs})=>{
-      Object.entries(fdiffs).forEach(([col,{fa,fb,issue,valA,valB}])=>{
+      Object.entries(fdiffs).forEach(([col,{fa,fb,issue}])=>{
         rows.push([`Formula: ${issue}`,...keysInA.map(k=>rowA[k]||''),col,fa,fb]);
       });
     });
